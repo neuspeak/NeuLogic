@@ -1,0 +1,7 @@
+name = "NeuLogic"
+uuid = "ccd7d939-59ed-4508-9add-9188cbddc829"
+authors = ["ComplYue <compl.yue@icloud.com>"]
+version = "0.1.0"
+
+[deps]
+StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
