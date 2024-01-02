@@ -10,6 +10,8 @@ struct BInt8
   BInt8(x::Integer) = new(UInt8(x))
 end
 
+Base.zero(::Type{BInt8}) = BInt8(zero(UInt8))
+
 # Conversion to BInt8
 Base.convert(::Type{BInt8}, x::Integer) = BInt8(x)
 Base.convert(::Type{BInt8}, x::AbstractFloat) = BInt8(round(x))
