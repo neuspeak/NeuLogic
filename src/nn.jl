@@ -9,9 +9,6 @@ export Neuron, Neuronet
 using StructArrays
 
 
-const Timestep = Int64
-
-
 struct Neuron
   uid::Int # unique identity
   axonn::Int # axon number
