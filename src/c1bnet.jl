@@ -15,6 +15,7 @@ using ..Neuronets
 struct C1BNet
   cells::StructArray{Neuron}
   axons::StructVector{Axon}
+  axon_ends::Vector{Int}
 
   potentialConst::Ref{Float64}
 
@@ -62,9 +63,10 @@ function createC1BNet(
 
     capcnts
   end
+  axon_ends = cumsum([cnt for (cap, cnt) in axon_capcnts])
 
   # number of tracked axons
-  naxons = sum(cnt for (cap, cnt) in axon_capcnts)
+  naxons = axon_ends[end]
   @assert naxons >= ncells
   # total number of tracked synapses
   nlinks = sum(cap * cnt for (cap, cnt) in axon_capcnts)
@@ -104,7 +106,7 @@ function createC1BNet(
   end
 
   return C1BNet(
-    cells, axons,
+    cells, axons, axon_ends,
     potentialConst,
     clear,
   )
