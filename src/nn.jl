@@ -3,7 +3,7 @@ module Neuronets
 
 # Neural Network
 
-export Neuron, Dendrite, Axon, Synapse
+export Neuron, Dendrite, Axon
 
 
 using StructArrays
@@ -24,12 +24,6 @@ struct Axon
   pren::Int # presynaptic neuron's id 
   ndendrite::Int # number of valid dendrites
   dendrites::StructVector{Dendrite} # dendrites
-end
-
-struct Synapse
-  pren::Int # presynaptic neuron's id
-  postn::Int # postsynaptic neuron's id
-  effi::Int8 # efficacy
 end
 
 
