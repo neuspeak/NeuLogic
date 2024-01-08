@@ -4,6 +4,13 @@ module C1BNets
 # Neural Network to do Formal Logic
 #
 # using a model inspired by a single Cortical Column in brain
+#
+# leverage the scale-free assumption, to preserve fixed (yet really tiny,
+# compared to fully-connected) capacity for possible synapses tracked in simu.
+#
+# mission: to see how close neural-formal-logic can get,
+#          toward general / common-sense reasoning
+#
 
 export C1BNet, createC1BNet
 
@@ -27,14 +34,16 @@ end
 function createC1BNet(
   ncols::Int=1_0000, # total number of Cortical Columns
   nmccs::Int=100, # number of cells per Mini Column
-  gamma::Float64=2.2,
-  min_links::Int=8, max_links::Int=10000,
+  gamma::Float64=2.2, # scale-free factor
+  # expected range of number-of-links per neuron/axon
+  nlinks1_min::Int=8, nlinks1_max::Int=10000,
+  # unit-capacity of the first/smallest cap group of axon slots
   axoncap1::Int=32,
 )
   @assert 1000 <= ncols <= 5_0000
   @assert 50 <= nmccs <= 5000
   @assert 2.0 <= gamma <= 3.0
-  @assert 1 <= min_links <= axoncap1 < max_links
+  @assert 1 <= nlinks1_min <= axoncap1 < nlinks1_max
 
   cells = StructArray{Neuron}((
     LinearIndices((nmccs, ncols)), # uid
@@ -46,10 +55,10 @@ function createC1BNet(
   potentialConst = Ref{Float64}(0)
 
   axon_capcnts = let capcnts = Tuple{Int,Int}[],
-    cap = axoncap1, k = min_links, p = 0.0,
-    C = ncells / sum(k^(-gamma) for k in min_links:max_links)
+    cap = axoncap1, k = nlinks1_min, p = 0.0,
+    C = ncells / sum(k^(-gamma) for k in nlinks1_min:nlinks1_max)
 
-    while k <= max_links
+    while k <= nlinks1_max
       if k > cap
         push!(capcnts, (cap, Int(ceil(C * p))))
         p = k^(-gamma)
@@ -96,6 +105,57 @@ function createC1BNet(
       zeros(Int, naxons), # ndendrite
       axon_dendrites,     # dendrites
     ))
+  end
+
+  function allocAxonSlot(cgi::Int=1; uid::Int, minCap::Int)
+    @assert cgi >= 1
+    @assert minCap >= 1
+    if cgi > length(axon_ends)
+      throw(ArgumentError("requested capacity too large: $minCap vs max preserved $(length(axons.dendrites[end]))"))
+    end
+    axonn = ub = axon_ends[cgi]
+    if length(axons.dendrites[ub]) < minCap
+      # this cap group doesn't have sufficient capacity, resort to the next larger one
+      return allocAxonSlot(cgi + 1; uid, minCap)
+    end
+
+    function settleAxon()
+      axons.pren[axonn] = uid
+      cells.axonn[uid] = axonn
+      return axonn
+    end
+
+    # attempt easy path first, try find an unoccupied axon slot and settle with it
+    lb = cgi > 1 ? axon_ends[cgi-1] + 1 : 1
+    for axonn in lb:ub
+      if axons.pren[axonn] == 0
+        @assert axons.ndendrite[axonn] == 0
+        return settleAxon()
+      end
+    end
+
+    # all axon slots in this cap group occupied, have to go the hard path
+    # migrate the biggest axon within current cap group into next larger group,
+    # then settle into its slot
+
+    # locate largest axonn to migrate
+    axonn, migLen = lb, axons.ndendrite[lb]
+    for n in lb+1:ub
+      if axons.ndendrite[n] > migLen
+        migLen = axons.ndendrite[n]
+        axonn = n
+      end
+    end
+
+    # allocate the target axon slot in the cap group that next larger
+    mig2axonn = allocAxonSlot(cgi + 1; uid=axons.pren[axonn], minCap=migLen)
+    # do the migration
+    axons.dendrites[mig2axonn][1:migLen] = axons.dendrites[axonn][1:migLen]
+    axons.ndendrite[mig2axonn] = migLen
+
+    # settle into this slot
+    axons.ndendrite[axonn] = 0 # empty dendrites, as migrated out now
+    return settleAxon()
   end
 
   function clear()
