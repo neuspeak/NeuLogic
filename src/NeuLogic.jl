@@ -11,4 +11,9 @@ include("./c1bnet.jl")
 using .C1BNets
 
 
+export C1BConcept
+include("./c1bc.jl")
+using .C1BConcepts
+
+
 end # module NeuLogic
