@@ -19,10 +19,70 @@ using StructArrays
 using ..Neuronets
 
 
+function allocAxonSlot(
+  cgi::Int, uid::Int, minCap::Int;
+  cellsAxonn::Array{Int},
+  axons::StructVector{Axon},
+  axonEnds::Vector{Int}, # axon groups (by cap according to free-scale assumption)
+)
+  @assert cgi >= 1
+  @assert minCap >= 1
+  if cgi > length(axonEnds)
+    throw(ArgumentError("requested capacity too large: $minCap vs max preserved $(length(axons.synapses[end]))"))
+  end
+  axonn = ub = axonEnds[cgi]
+  if length(axons.synapses[ub]) < minCap
+    # this cap group doesn't have sufficient capacity, resort to the next larger one
+    return allocAxonSlot(cgi + 1, uid, minCap;
+      cellsAxonn, axons, axonEnds)
+  end
+
+  function settleAxon()
+    axons.pren[axonn] = uid
+    cellsAxonn[uid] = axonn
+    return axonn
+  end
+
+  # attempt easy path first, try find an unoccupied axon slot and settle with it
+  lb = cgi > 1 ? axonEnds[cgi-1] + 1 : 1
+  for axonn in lb:ub
+    if axons.pren[axonn] == 0
+      @assert axons.nsynapse[axonn] == 0
+      return settleAxon()
+    end
+  end
+
+  # all axon slots in this cap group occupied, have to go the hard path
+  # migrate the biggest axon within current cap group into next larger group,
+  # then settle into its slot
+
+  # locate largest axonn to migrate
+  axonn, migLen = lb, axons.nsynapse[lb]
+  for n in lb+1:ub
+    if axons.nsynapse[n] > migLen
+      migLen = axons.nsynapse[n]
+      axonn = n
+    end
+  end
+
+  # allocate the target axon slot in the cap group that next larger
+  mig2axonn = allocAxonSlot(cgi + 1, axons.pren[axonn], migLen;
+    cellsAxonn, axons, axonEnds)
+  # do the migration
+  axons.synapses[mig2axonn][1:migLen] = axons.synapses[axonn][1:migLen]
+  axons.nsynapse[mig2axonn] = migLen
+
+  # settle into this slot
+  axons.nsynapse[axonn] = 0 # empty synapses, as migrated out now
+  return settleAxon()
+end
+
+
 struct C1BNet
   cells::StructArray{Neuron}
-  axons::StructVector{Axon}
-  axon_ends::Vector{Int}
+  integratAxons::StructVector{Axon}
+  modulateAxons::StructVector{Axon}
+  axonEnds::Vector{Int} # axon groups (by cap according to free-scale assumption)
 
   potentialConst::Ref{Float64}
 
@@ -47,7 +107,8 @@ function createC1BNet(
 
   cells = StructArray{Neuron}((
     LinearIndices((nmccs, ncols)), # uid
-    zeros(Int, (nmccs, ncols)), # axonn
+    zeros(Int, (nmccs, ncols)), # integratAxonn
+    zeros(Int, (nmccs, ncols)), # modulateAxonn
     zeros(Int8, (nmccs, ncols)), # potential
   ))
   ncells = length(cells)
@@ -72,29 +133,39 @@ function createC1BNet(
 
     capcnts
   end
-  axon_ends = cumsum([cnt for (cap, cnt) in axon_capcnts])
+  axonEnds = cumsum([cnt for (cap, cnt) in axon_capcnts])
 
   # number of tracked axons
-  naxons = axon_ends[end]
+  naxons = axonEnds[end]
   @assert naxons >= ncells
   # total number of tracked synapses
   nlinks = sum(cap * cnt for (cap, cnt) in axon_capcnts)
 
   # storage for tracked synapses
-  total_synapses = StructVector{Dendrite}((
+  integrat_synapses = StructVector{Dendrite}((
+    zeros(Int, nlinks), # postn
+    zeros(Float32, nlinks), # effi
+  ))
+  modulate_synapses = StructVector{Dendrite}((
     zeros(Int, nlinks), # postn
     zeros(Float32, nlinks), # effi
   ))
 
-  axons = let dendrite_begin = 1
-    axon_synapses = StructVector{Dendrite}[]
-    sizehint!(axon_synapses, naxons)
+  integratAxons, modulateAxons = let dendrite_begin = 1
+    integratAxon_synapses = StructVector{Dendrite}[]
+    modulateAxon_synapses = StructVector{Dendrite}[]
+    sizehint!(integratAxon_synapses, naxons)
+    sizehint!(modulateAxon_synapses, naxons)
     for (cap, cnt) in axon_capcnts
       for _ in 1:cnt
         dendrite_end = dendrite_begin + cap - 1
-        push!(axon_synapses, StructVector{Dendrite}((
-          total_synapses.postn[dendrite_begin:dendrite_end],
-          total_synapses.effi[dendrite_begin:dendrite_end],
+        push!(integratAxon_synapses, StructVector{Dendrite}((
+          integrat_synapses.postn[dendrite_begin:dendrite_end],
+          integrat_synapses.effi[dendrite_begin:dendrite_end],
+        )))
+        push!(modulateAxon_synapses, StructVector{Dendrite}((
+          modulate_synapses.postn[dendrite_begin:dendrite_end],
+          modulate_synapses.effi[dendrite_begin:dendrite_end],
         )))
         dendrite_begin = dendrite_end + 1
       end
@@ -103,60 +174,26 @@ function createC1BNet(
     StructVector{Axon}((
       zeros(Int, naxons), # pren
       zeros(Int, naxons), # nsynapse
-      axon_synapses,     # synapses
+      integratAxon_synapses, # synapses
+    )), StructVector{Axon}((
+      zeros(Int, naxons), # pren
+      zeros(Int, naxons), # nsynapse
+      modulateAxon_synapses, # synapses
     ))
   end
 
-  function allocAxonSlot(cgi::Int=1; uid::Int, minCap::Int)
-    @assert cgi >= 1
-    @assert minCap >= 1
-    if cgi > length(axon_ends)
-      throw(ArgumentError("requested capacity too large: $minCap vs max preserved $(length(axons.synapses[end]))"))
-    end
-    axonn = ub = axon_ends[cgi]
-    if length(axons.synapses[ub]) < minCap
-      # this cap group doesn't have sufficient capacity, resort to the next larger one
-      return allocAxonSlot(cgi + 1; uid, minCap)
-    end
-
-    function settleAxon()
-      axons.pren[axonn] = uid
-      cells.axonn[uid] = axonn
-      return axonn
-    end
-
-    # attempt easy path first, try find an unoccupied axon slot and settle with it
-    lb = cgi > 1 ? axon_ends[cgi-1] + 1 : 1
-    for axonn in lb:ub
-      if axons.pren[axonn] == 0
-        @assert axons.nsynapse[axonn] == 0
-        return settleAxon()
-      end
-    end
-
-    # all axon slots in this cap group occupied, have to go the hard path
-    # migrate the biggest axon within current cap group into next larger group,
-    # then settle into its slot
-
-    # locate largest axonn to migrate
-    axonn, migLen = lb, axons.nsynapse[lb]
-    for n in lb+1:ub
-      if axons.nsynapse[n] > migLen
-        migLen = axons.nsynapse[n]
-        axonn = n
-      end
-    end
-
-    # allocate the target axon slot in the cap group that next larger
-    mig2axonn = allocAxonSlot(cgi + 1; uid=axons.pren[axonn], minCap=migLen)
-    # do the migration
-    axons.synapses[mig2axonn][1:migLen] = axons.synapses[axonn][1:migLen]
-    axons.nsynapse[mig2axonn] = migLen
-
-    # settle into this slot
-    axons.nsynapse[axonn] = 0 # empty synapses, as migrated out now
-    return settleAxon()
-  end
+  allocIntegratAxonSlot(uid::Int, minCap::Int=1) = allocAxonSlot(
+    1, uid, minCap;
+    cellsAxonn=cells.integratAxonn::Array{Int},
+    axons=integratAxons,
+    axonEnds=axonEnds,
+  )
+  allocModulateAxonSlot(uid::Int, minCap::Int=1) = allocAxonSlot(
+    1, uid, minCap;
+    cellsAxonn=cells.modulateAxonn,
+    axons=modulateAxons,
+    axonEnds=axonEnds,
+  )
 
   function clear()
     cells.potential[:] = [
@@ -166,7 +203,7 @@ function createC1BNet(
   end
 
   return C1BNet(
-    cells, axons, axon_ends,
+    cells, integratAxons, modulateAxons, axonEnds,
     potentialConst,
     clear,
   )

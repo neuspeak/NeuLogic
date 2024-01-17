@@ -11,7 +11,8 @@ using StructArrays
 
 struct Neuron
   uid::Int # unique identity
-  axonn::Int # axon number
+  integratAxonn::Int # integrate axon number
+  modulateAxonn::Int # modulate axon number
   potential::Float32 # spiking probability
 end
 
