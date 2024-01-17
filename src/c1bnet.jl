@@ -81,20 +81,20 @@ function createC1BNet(
   nlinks = sum(cap * cnt for (cap, cnt) in axon_capcnts)
 
   # storage for tracked synapses
-  total_dendrites = StructVector{Dendrite}((
+  total_synapses = StructVector{Dendrite}((
     zeros(Int, nlinks), # postn
     zeros(Float32, nlinks), # effi
   ))
 
   axons = let dendrite_begin = 1
-    axon_dendrites = StructVector{Dendrite}[]
-    sizehint!(axon_dendrites, naxons)
+    axon_synapses = StructVector{Dendrite}[]
+    sizehint!(axon_synapses, naxons)
     for (cap, cnt) in axon_capcnts
       for _ in 1:cnt
         dendrite_end = dendrite_begin + cap - 1
-        push!(axon_dendrites, StructVector{Dendrite}((
-          total_dendrites.postn[dendrite_begin:dendrite_end],
-          total_dendrites.effi[dendrite_begin:dendrite_end],
+        push!(axon_synapses, StructVector{Dendrite}((
+          total_synapses.postn[dendrite_begin:dendrite_end],
+          total_synapses.effi[dendrite_begin:dendrite_end],
         )))
         dendrite_begin = dendrite_end + 1
       end
@@ -102,8 +102,8 @@ function createC1BNet(
     @assert dendrite_begin == nlinks + 1
     StructVector{Axon}((
       zeros(Int, naxons), # pren
-      zeros(Int, naxons), # ndendrite
-      axon_dendrites,     # dendrites
+      zeros(Int, naxons), # nsynapse
+      axon_synapses,     # synapses
     ))
   end
 
@@ -111,10 +111,10 @@ function createC1BNet(
     @assert cgi >= 1
     @assert minCap >= 1
     if cgi > length(axon_ends)
-      throw(ArgumentError("requested capacity too large: $minCap vs max preserved $(length(axons.dendrites[end]))"))
+      throw(ArgumentError("requested capacity too large: $minCap vs max preserved $(length(axons.synapses[end]))"))
     end
     axonn = ub = axon_ends[cgi]
-    if length(axons.dendrites[ub]) < minCap
+    if length(axons.synapses[ub]) < minCap
       # this cap group doesn't have sufficient capacity, resort to the next larger one
       return allocAxonSlot(cgi + 1; uid, minCap)
     end
@@ -129,7 +129,7 @@ function createC1BNet(
     lb = cgi > 1 ? axon_ends[cgi-1] + 1 : 1
     for axonn in lb:ub
       if axons.pren[axonn] == 0
-        @assert axons.ndendrite[axonn] == 0
+        @assert axons.nsynapse[axonn] == 0
         return settleAxon()
       end
     end
@@ -139,10 +139,10 @@ function createC1BNet(
     # then settle into its slot
 
     # locate largest axonn to migrate
-    axonn, migLen = lb, axons.ndendrite[lb]
+    axonn, migLen = lb, axons.nsynapse[lb]
     for n in lb+1:ub
-      if axons.ndendrite[n] > migLen
-        migLen = axons.ndendrite[n]
+      if axons.nsynapse[n] > migLen
+        migLen = axons.nsynapse[n]
         axonn = n
       end
     end
@@ -150,11 +150,11 @@ function createC1BNet(
     # allocate the target axon slot in the cap group that next larger
     mig2axonn = allocAxonSlot(cgi + 1; uid=axons.pren[axonn], minCap=migLen)
     # do the migration
-    axons.dendrites[mig2axonn][1:migLen] = axons.dendrites[axonn][1:migLen]
-    axons.ndendrite[mig2axonn] = migLen
+    axons.synapses[mig2axonn][1:migLen] = axons.synapses[axonn][1:migLen]
+    axons.nsynapse[mig2axonn] = migLen
 
     # settle into this slot
-    axons.ndendrite[axonn] = 0 # empty dendrites, as migrated out now
+    axons.nsynapse[axonn] = 0 # empty synapses, as migrated out now
     return settleAxon()
   end
 

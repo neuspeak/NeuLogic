@@ -22,8 +22,8 @@ end
 
 struct Axon
   pren::Int # presynaptic neuron's id 
-  ndendrite::Int # number of valid dendrites
-  dendrites::StructVector{Dendrite} # dendrites
+  nsynapse::Int # number of valid synapses
+  synapses::StructVector{Dendrite} # synapses
 end
 
 
